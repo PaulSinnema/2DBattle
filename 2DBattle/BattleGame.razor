@@ -1,0 +1,129 @@
+﻿@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<div id="scene" class="scene"></div>
+
+<div class="version">v@(AppVersion)</div>
+
+<div class="rotate"><span>⟳</span>Draai je telefoon naar liggend</div>
+
+@if (state == "playing" || state == "levelup")
+{
+    <div class="hud">
+        <div>Niveau @level / 8</div>
+        <div>Vijanden: @enemies</div>
+        <div>HP: @hp</div>
+        <div class="health"><div class="health-bar @(hp > 10 ? "boost" : "")" style="@($"width:{Math.Min(100, hp * 10)}%")"></div></div>
+        <div>Wapen: @weapon (@ammo)</div>
+    </div>
+}
+
+<div class="touch">
+    <div class="pad">
+        <button data-key="ArrowLeft">◀</button><button data-key="ArrowDown">▼</button><button data-key="ArrowRight">▶</button>
+    </div>
+    <div class="actions">
+        <button class="jump" data-key="ArrowUp">▲</button>
+        <button class="fire" data-key="KeyJ">VUUR</button>
+    </div>
+</div>
+
+@switch (state)
+{
+    case "loading":
+        <div class="overlay"><h1>2D BATTLE</h1><div>Laden…</div></div>
+        break;
+    case "start":
+        <div class="overlay">
+            <h1>2D BATTLE</h1>
+            <div class="controls">
+                Versla alle pixelvijanden in 8 niveaus. Niveau 8: de eindbaas!<br />
+                Kistjes op de plateaus geven wapens. Medkits geven +3 HP.<br />
+                A/D of ◀ ▶: lopen &nbsp;•&nbsp; W/↑: springen &nbsp;•&nbsp; S/↓: door plateau zakken<br />
+                Spatie, J of klik: schieten
+            </div>
+            <button @onclick="StartGame">Start</button>
+        </div>
+        break;
+    case "levelup":
+        <div class="overlay banner"><h1>Niveau @level voltooid!</h1><div>Meer vijanden komen eraan…</div></div>
+        break;
+    case "gameover":
+        <div class="overlay">
+            <h1>GAME OVER</h1>
+            <div class="controls">Je sneuvelde op niveau @level.</div>
+            <button @onclick="StartGame">Opnieuw</button>
+        </div>
+        break;
+    case "win":
+        <div class="overlay">
+            <h1>GEWONNEN!</h1>
+            <div class="controls">Je hebt de eindbaas verslagen.</div>
+            <button @onclick="StartGame">Opnieuw spelen</button>
+        </div>
+        break;
+}
+
+@code {
+    private static readonly string AppVersion = GetVersion();
+    private DotNetObjectReference<BattleGame>? selfRef;
+    private IJSObjectReference? module;
+    private string state = "loading";
+    private int level = 1;
+    private int enemies;
+    private int hp = 10;
+    private string weapon = "Pistool";
+    private string ammo = "∞";
+
+    private static string GetVersion()
+    {
+        var info = typeof(BattleGame).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0";
+        var plus = info.IndexOf('+');
+        return plus >= 0 ? info[..plus] : info;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        // Start background update check (GitHub Pages)
+        await JS.InvokeVoidAsync("gameUpdater.start", AppVersion);
+
+        selfRef = DotNetObjectReference.Create(this);
+        // Version query busts the browser/CDN cache for the game script
+        module = await JS.InvokeAsync<IJSObjectReference>("import", $"./js/game.js?v={AppVersion}");
+        await module.InvokeVoidAsync("init", "scene", selfRef);
+
+        state = "start";
+        StateHasChanged();
+    }
+
+    private async Task StartGame()
+    {
+        if (module is not null)
+            await module.InvokeVoidAsync("startGame");
+    }
+
+    [JSInvokable]
+    public void OnStatus(string newState, int newLevel, int enemiesLeft, int newHp, string newWeapon, string newAmmo)
+    {
+        state = newState;
+        level = newLevel;
+        enemies = enemiesLeft;
+        hp = newHp;
+        weapon = newWeapon;
+        ammo = newAmmo;
+        StateHasChanged();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (module is not null)
+        {
+            try { await module.DisposeAsync(); }
+            catch (JSDisconnectedException) { }
+        }
+        selfRef?.Dispose();
+    }
+}
